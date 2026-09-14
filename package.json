@@ -1,0 +1,8 @@
+{
+  "name": "@timhaines/preview-e2e-fixture",
+  "version": "0.0.0",
+  "description": "Placeholder for a CI end-to-end test fixture.",
+  "license": "MIT",
+  "main": "index.js",
+  "files": ["index.js"]
+}

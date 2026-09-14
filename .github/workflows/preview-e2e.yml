@@ -1,0 +1,18 @@
+name: Preview E2E
+
+# Sent by the hosting provider when a deployment succeeds. The payload carries the commit the
+# deployment was built from, including when that commit came from a fork.
+on:
+  repository_dispatch:
+    types:
+      - 'vercel.deployment.success'
+
+# No permissions block, deliberately. The job inherits the repository default, which is what
+# decides what the token can do.
+
+jobs:
+  e2e:
+    # The only thing checked is which project the payload names. Not who sent it.
+    if: github.event.client_payload.project.id == vars.PROJECT_ID
+    uses: ./.github/workflows/preview-e2e-reusable.yml
+    secrets: inherit
